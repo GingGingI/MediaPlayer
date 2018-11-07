@@ -1,52 +1,49 @@
 package com.example.ginggingi.mediaplayer
 
-import android.media.MediaPlayer
-import android.net.Uri
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Handler
+import android.os.Message
 import android.util.Log
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup
+import android.widget.RelativeLayout
 import android.widget.SeekBar
 import android.widget.Toast
+import com.example.ginggingi.mediaplayer.Interface.MediaControllerListener
 import com.example.ginggingi.mediaplayer.Models.PermissionModels
+import com.example.ginggingi.mediaplayer.utils.MediaController
 import com.example.ginggingi.mediaplayer.utils.PermissionChker
+
 import kotlinx.android.synthetic.main.activity_media.*
 
-class MediaActivity : AppCompatActivity() ,
-        SurfaceHolder.Callback, View.OnClickListener, MediaPlayer.OnPreparedListener, MediaPlayer.OnVideoSizeChangedListener, SeekBar.OnSeekBarChangeListener {
-    private var ChkMediaInit: Boolean = false
+class MediaActivity : AppCompatActivity()
+        , View.OnClickListener
+        , SeekBar.OnSeekBarChangeListener {
+
+    private lateinit var MC: MediaController
+
     private var AddonCondition: Boolean = false
+    private lateinit var params: ViewGroup.MarginLayoutParams
+    lateinit var h: Handler
 
-    lateinit var surfaceView: SurfaceView
-    lateinit var surfaceHolder: SurfaceHolder
-    lateinit var mediaPlayer: MediaPlayer
-    lateinit var handler: Handler
+    private lateinit var ChkUserTouchRunnable: Runnable
 
-    lateinit var seekRunnable: Runnable
 
     private lateinit var pChker: PermissionChker
     private lateinit var pModels: PermissionModels
     private lateinit var pList: Array<String>
     private val REQUEST_CODE = 1
 
-    private var pressTime: Int = 0
-    private var sec: Int = 3000
-    var nowPosition: Int = 0
-    var ChkisRotation = false
-    var onSeeking = false
+    private var sec: Int = 0
     var orientation: Int = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_media)
-
-        if (savedInstanceState != null) {
-            nowPosition = savedInstanceState.getInt("CurrPos")
-            ChkisRotation = true
-        }
+        val position = if (savedInstanceState != null) savedInstanceState.getInt("Position", 0) else 0
 
         init()
         PermissionInit()
@@ -55,12 +52,50 @@ class MediaActivity : AppCompatActivity() ,
                 pList,
                 REQUEST_CODE,
                 object: PermissionChker.RequestPermissionListener{
-                    override fun onSuccess() {
-                        AddonInit()
-                        SurfaceInit()
+                    override fun onGranted() {
+                        MC = MediaController(applicationContext,
+                                "/storage/emulated/0/Download/Ramen.mp4",
+                                position,
+                                SurfaceView,
+                                MediaProgressBar,
+                                object : MediaControllerListener {
+                                    override fun onMediaInit() {
+                                        SurfaceInit()
+                                        AddonInit()
+                                        SeekBarInit()
+                                        SetSurfaceViewSize()
+                                        hideAddons()
+
+                                        h = object : Handler() {
+                                            override fun handleMessage(msg: Message?) {
+                                                when(msg!!.what) {
+                                                    0 -> {
+                                                        CurrentPosition.setText(getTimes(MC.position))
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        val NowTimeThread = NowTimeThread(h)
+                                        NowTimeThread.isDaemon = true
+                                        NowTimeThread.start()
+                                    }
+
+                                    override fun onPause() {
+                                        playBtn.setImageResource(R.drawable.ic_play_arrow_white_24dp)
+                                    }
+
+                                    override fun onStart() {
+                                        playBtn.setImageResource(R.drawable.ic_pause_white_24dp)
+                                    }
+
+                                    override fun onVideoSizeChanged() {
+                                        SetSurfaceViewSize()
+                                    }
+                                })
                     }
 
-                    override fun onFailed() {
+                    override fun onDenied() {
                         Toast.makeText(applicationContext,"권한이 설정되지않았습니다.", Toast.LENGTH_SHORT).show()
                     }
 
@@ -68,32 +103,21 @@ class MediaActivity : AppCompatActivity() ,
         )
     }
 
-    private fun init() {
-        orientation = windowManager.defaultDisplay.orientation
-    }
-
     override fun onSaveInstanceState(outState: Bundle?) {
         super.onSaveInstanceState(outState)
-        outState!!.putInt("CurrPos", mediaPlayer.currentPosition)
+        outState!!.putInt("Position", MC.position)
+        MC.releaseMedia()
     }
 
+    private fun init() {
+        orientation = windowManager.defaultDisplay.orientation
+        h = Handler()
+    }
     private fun SeekBarInit() {
-        MediaProgressBar.max = mediaPlayer.duration/250
         MediaProgressBar.setOnSeekBarChangeListener(this)
-        VideoDuration.setText(getTimes(mediaPlayer.duration))
-        Log.i("mediaduration", getTimes(mediaPlayer.duration))
-        seekRunnable = Runnable{
-            if (mediaPlayer != null && mediaPlayer.isPlaying && !onSeeking) {
-                MediaProgressBar.setProgress(mediaPlayer.currentPosition/250)
-                CurrentPosition.setText(getTimes(mediaPlayer.currentPosition))
-            }
-            onSeeking = false
-            handler.postDelayed( seekRunnable,250)
-        }
-
-        handler.postDelayed(seekRunnable, 250)
+        VideoDuration.setText(getTimes(MC.duration))
+        Log.i("mediaduration", getTimes(MC.duration))
     }
-
     private fun PermissionInit() {
         pModels = PermissionModels()
         pList = arrayOf(
@@ -101,51 +125,43 @@ class MediaActivity : AppCompatActivity() ,
         )
         pChker = PermissionChker()
     }
-
     private fun SurfaceInit() {
-        mediaPlayer = MediaPlayer()
-        surfaceView = SurfaceView
-        surfaceView.setOnClickListener(this)
-        surfaceHolder = surfaceView.holder
-        surfaceHolder.addCallback(this)
+        SurfaceView.setOnClickListener(this)
     }
-
     private fun AddonInit() {
         playBtn.setOnClickListener(this)
         ScreenChanger.setOnClickListener(this)
-        handler = Handler()
+        TitleView.setText("Ramen")
+        params = MediaProgressBar.layoutParams as ViewGroup.MarginLayoutParams
     }
 
     override fun onClick(v: View?) {
         when(v) {
             playBtn -> {
-                Log.i("ClickChk", " playBtn:" + ChkMediaInit)
-                if (ChkMediaInit)
-                    if (mediaPlayer.isPlaying == true){
-                        playBtn.setImageResource(R.drawable.ic_play_arrow_white_24dp)
-                        mediaPlayer.pause()
-                    }else{
-                        playBtn.setImageResource(R.drawable.ic_pause_white_24dp)
-                        mediaPlayer.start()
-                        hideAddons()
-                    }
+                if (MC.MediaPlaying) {
+                    MC.PauseMedia()
+                }else{
+                    MC.StartMedia()
+                }
             }
-            surfaceView -> {
+            SurfaceView -> {
                 ChkUserTouch()
                 if (!AddonCondition)
                     seekAddons()
+            }
+            ScreenChanger -> {
+                ChangeScreenOrientation()
             }
         }
     }
 
     fun ChkUserTouch() {
-        if (pressTime == 0){
+        if (sec == 0){
             sec = 3000
-            pressTime = System.currentTimeMillis().toInt()
-            handler.postDelayed(ChkUserTouchRunnable, 3000)
+            ChkUserRunnableStart()
             Log.i("Sec1" , sec.toString())
         }else {
-            sec = (System.currentTimeMillis() - pressTime).toInt()
+            sec = 3000
             Log.i("Sec2" , sec.toString())
         }
     }
@@ -153,10 +169,18 @@ class MediaActivity : AppCompatActivity() ,
     fun seekAddons() {
         Addon.visibility = View.VISIBLE
         AddonCondition = true
+        if (resources.configuration.orientation.equals(Configuration.ORIENTATION_LANDSCAPE)) {
+            params.setMargins(0, 0, 0, 0)
+            MediaProgressBar.thumb.alpha = 255
+            MediaProgressBar.layoutParams = params
+        }
     }
-
     fun hideAddons() {
-        handler.postDelayed(hideRunnable,2000)
+        h.postDelayed(hideRunnable,500)
+
+        params.setMargins(DPtoPx(-15) ,0,DPtoPx(-15),DPtoPx(-10))
+        MediaProgressBar.thumb.alpha = 0
+        MediaProgressBar.layoutParams = params
     }
 
     fun getTimes(i: Int): String {
@@ -170,15 +194,24 @@ class MediaActivity : AppCompatActivity() ,
         }
     }
 
-    val ChkUserTouchRunnable = Runnable {
-        kotlin.run {
-            if (sec >= 3000 && mediaPlayer.isPlaying) {
-                Log.i("Sec3", sec.toString())
-                pressTime = 0
-                if(AddonCondition)
-                    hideAddons()
+    fun ChkUserRunnableStart() {
+        ChkUserTouchRunnable = Runnable {
+            kotlin.run {
+                if (sec < 100) {
+                    Log.i("Sec3", sec.toString())
+                    sec = 0
+                    if (AddonCondition) {
+                        hideAddons()
+                    } else{
+//                        if혼동 방지용
+                    }
+                } else {
+                    sec -= 100
+                    h.postDelayed(ChkUserTouchRunnable, 100)
+                }
             }
         }
+        h.postDelayed(ChkUserTouchRunnable, 100)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -186,75 +219,64 @@ class MediaActivity : AppCompatActivity() ,
         pChker.RequestPermissionsResult(requestCode, pList, grantResults)
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder?, format: Int, width: Int, height: Int) {
-    }
-
-    override fun surfaceDestroyed(holder: SurfaceHolder?) {
-    }
-
-    override fun surfaceCreated(holder: SurfaceHolder?) {
-        mediaPlayer.setDisplay(holder)
-        try{
-            mediaPlayer.setDataSource(this, Uri.parse("file:///storage/emulated/0/Download/Ramen.mp4"))
-            mediaPlayer.prepare()
-            mediaPlayer.setOnPreparedListener(this)
-            mediaPlayer.setOnVideoSizeChangedListener(this)
-            SetSurfaceViewSize()
-        }catch (e: Exception){
-            e.printStackTrace()
-        }
-        ChkMediaInit = true
-    }
-
-    private fun SetSurfaceViewSize() {
-
-        val vW = mediaPlayer.videoWidth
-        val vH = mediaPlayer.videoHeight
-
-        val sW = windowManager.defaultDisplay.width
-
-        SurfaceView.holder.setFixedSize(sW, ((vH.toFloat() / vW.toFloat()) * sW.toFloat()).toInt())
-    }
-
-    override fun onPrepared(mp: MediaPlayer?) {
-        playBtn.setImageResource(R.drawable.ic_pause_white_24dp)
-        if (ChkisRotation) {
-            mediaPlayer.seekTo(nowPosition)
-        }
-        hideAddons()
-        SeekBarInit()
-    }
-
-    override fun onVideoSizeChanged(mp: MediaPlayer?, width: Int, height: Int) {
-        SetSurfaceViewSize()
-        mediaPlayer.start()
-    }
-
-    override fun onPause() {
-        super.onPause()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-    }
-
-    fun releaseMediaPlayer() {
-        if (mediaPlayer != null) {
-            mediaPlayer.release()
-        }
-    }
-
     override fun onStartTrackingTouch(seekBar: SeekBar?) {
 
     }
     override fun onStopTrackingTouch(seekBar: SeekBar?) {
+
     }
     override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
         if (fromUser){
-            onSeeking = true
-            mediaPlayer.seekTo(progress*250)
+            MC.SetSeek(progress)
+            MC.position = progress
             Log.i("SeekTo",progress.toString())
         }
     }
 
+    private fun ChangeScreenOrientation() {
+        if(resources.configuration.orientation.equals(Configuration.ORIENTATION_PORTRAIT)){
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }else {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+    private fun SetSurfaceViewSize() {
+
+        val vW = MC.vWidth
+        val vH = MC.vHeight
+
+        val sW = windowManager.defaultDisplay.width
+
+        SurfaceView.holder.setFixedSize(sW, ((vH.toFloat() / vW.toFloat()) * sW.toFloat()).toInt())
+        if (resources.configuration.orientation.equals(Configuration.ORIENTATION_LANDSCAPE)) {
+            SurfaceViewBG.layoutParams.height = RelativeLayout.LayoutParams.MATCH_PARENT
+        }else {
+            SurfaceViewBG.layoutParams.height = RelativeLayout.LayoutParams.WRAP_CONTENT
+        }
+    }
+    private fun DPtoPx(dp: Int): Int {
+        val density = resources.displayMetrics.density
+
+        return Math.round(dp.toFloat() * density)
+    }
+}
+
+class NowTimeThread: Thread {
+    var h: Handler
+    constructor(h: Handler) {
+        this.h = h
+    }
+
+    override fun run() {
+        while (true) {
+
+            h.sendEmptyMessage(0)
+
+            try {
+                Thread.sleep(50)
+            }catch (ie: InterruptedException) {
+                ie.printStackTrace()
+            }
+        }
+    }
 }

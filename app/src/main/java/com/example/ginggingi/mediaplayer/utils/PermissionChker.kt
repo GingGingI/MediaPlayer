@@ -18,7 +18,7 @@ class PermissionChker{
         this.mRequestCode = requestCode
 
         if (!needRequestRuntimePermission()) {
-            RPListener.onSuccess()
+            RPListener.onGranted()
             return
         }
         requestUnGranted(permissions, requestCode)
@@ -32,7 +32,7 @@ class PermissionChker{
         val permissions: Array<String> = FindIsPermissionUngranted(permissions)
 
         if (permissions.size == 0){
-            RPListener.onSuccess()
+            RPListener.onGranted()
             return
         }
         return ActivityCompat.requestPermissions(mActivity, permissions, requestCode)
@@ -56,20 +56,20 @@ class PermissionChker{
             if (grantResult.size > 0) {
                 for (gResult in grantResult) {
                     if (gResult != PackageManager.PERMISSION_GRANTED) {
-                        RPListener.onFailed()
+                        RPListener.onDenied()
                         return
                     }
                 }
             }
-            RPListener.onSuccess()
+            RPListener.onGranted()
         } else {
-            RPListener.onFailed()
+            RPListener.onDenied()
         }
     }
 
     interface RequestPermissionListener {
-        fun onSuccess()
-        fun onFailed()
+        fun onGranted()
+        fun onDenied()
     }
 
 }
